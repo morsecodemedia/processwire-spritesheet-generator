@@ -1,0 +1,230 @@
+<?php
+
+/**
+ * Spritesheet Creator Module
+ *
+ * Takes imaes from a directory and creates a spritesheet along with accompanying css.
+ *
+ * @author Brandon Morse
+ * 
+ * http://www.morsecodemedia.com
+ * Created: April 2015
+ * 
+ * ProcessWire 2.x
+ * Copyright (C) 2014 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ *
+**/
+ 
+class SpritesheetCreator extends WireData implements Module {
+	
+	/**
+	 * getModuleInfo is a module required by all modules to tell ProcessWire about them
+	 *
+	 * @return array
+	 *
+	**/
+	public static function getModuleInfo() {
+	
+		return array('title' => 'Sprite Sheet Creator', // The module'ss title, typically a little more descriptive than the class name
+								 'version' => 1.0, // version number 
+								 'summary' => 'Takes images from a folder and creates a sprite sheet along with corresponding css.',// brief description of what this module is
+								 'href' => 'http://www.morsecodemedia.com', // Optional URL to more information about the module
+								 // singular=true: indicates that only one instance of the module is allowed.
+								 // This is usually what you want for modules that attach hooks. 
+								 'singular' => true, 
+								 // autoload=true: indicates the module should be started with ProcessWire.
+								 // This is necessary for any modules that attach runtime hooks, otherwise those
+								 // hooks won't get attached unless some other code calls the module on it's own.
+								 // Note that autoload modules are almost always also 'singular' (seen above).
+								 'autoload' => true, 
+								 // Optional font-awesome icon name, minus the 'fa-' part
+								 'icon' => 'th', 
+								);
+	}
+	
+	
+	public function init() {
+	
+		$this->addHookAfter('ProcessPageEdit::buildForm', $this, 'addCreateSpriteButton');
+		
+		// tell ProcessWire that this is a page save
+		if ( $this->input->post->create_sprite_btn ) {
+			$this->input->post->submit_save = 1;
+			// add a hook to every time a page is saved
+			$this->pages->addHookAfter('Pages::saveReady', $this, 'generateSprites');
+		}
+		
+	}
+	
+	public function generateSprites() {
+		// TODO:
+		// Make sprite source relative to the ProcessWire Page that the module is included on
+		// Make sprite destination based on the projects asset folder / or push it to ProcessWires's template asset folder
+		$sprite = new spritesheetCreator($_SERVER['DOCUMENT_ROOT'].'/site/assets/files/1013', $_SERVER['DOCUMENT_ROOT'].'/public/img', 'spritesheet', 400, 250);
+		$sprite->createSpriteSheet();
+	}
+	
+	public function addCreateSpriteButton($event) {
+		$form = $event->return;
+		
+		// new button
+		$f = $this->modules->InputfieldSubmit;
+		$f->attr('name', 'create_sprite_btn');
+		$f->attr('value', 'Create Spritesheet');
+		
+		// add button after the regular save button
+		// TODO:
+		// Fix Hook that module is only applied to pages that the fieldtype is added to - currently on all pages.
+		$form->insertAfter($f, $form->get('submit_save'));
+	}
+	
+	
+	public function spritesheetCreator($folder, $output, $name, $x, $y) {
+		// TODO:
+		// Make path to folder dynamic based on the path of the project that this module is being installed on
+		$this->folder = ( $folder ? $folder : '/var/www/wag/www/site/assets/files' ); // Folder name to get images from
+		$this->filetypes = array( 'jpg' => true,
+														 	'jpg' => true,
+														 	'png' => true,
+														 	'gif' => false
+														 ); // Acceptable file extensions
+		// TODO:
+		// Use project set output directory from TODO List above.												 
+		$this->output = ( $output ? $output : '/public/img' ); // Output directory								
+		$this->name = ( $name ? $name : 'mcm-spritesheet' ); // Output filenames, mcm-spritesheet.png and mcm-spritesheet.css
+		// These are the dimensions of the images you want to consider for the sprite sheet, all others are ignored.
+		// If you wish to have images of variable size you will also want to do some mathematical optimization, to fit images into the
+		// smallest sprite dimensions possible
+		$this->x = $x; // Width of images to consider
+		$this->y = $y; // Height of images to consider
+		$this->files = array();
+		
+	}
+	
+	public function createSpriteSheet() {
+		$basedir = $this->folder;
+		$files = array();
+		
+		// Search the directory for images fitting out needs
+		if ( $handler = opendir($this->folder) ) {
+			
+			if ( count(scandir($this->folder)) < 1 ) {
+				$this->error('SpritesheetCreator Module: Unable to create sprite sheet from empty directory.');
+			}
+			
+			while ( false !== ( $file = readdir($handler) ) ) {
+				
+				$splitter = explode('.', $file);
+				
+				// Make sure we aren't grabbing img extensions we don't want
+				if ( $file[0] == '.' || !isset($this->filetypes[$splitter[count($splitter)-1]]) ) {
+					continue;
+				} 
+				
+				// Make sure the image is within the dimensions we decided
+				$output = getimagesize($this->folder.'/'.$file);
+				if ( $output[0] != $this->x && $output[1] != $this->y ) {
+					continue;
+				}
+				
+				// We accept you image, welcome to the family
+				$files[$file] = $file;
+				
+			}
+			
+			$this->files = array_merge($this->files, $files);
+						
+			closedir($handler);
+		
+		} else {
+		
+			$this->error('SpritesheetCreator Module: Unable to search '. $this->folder .' for images.');
+			return false;
+			
+		}
+		
+		// $this->yy is the height of the entire sprite
+		$this->yy = $this->y * count($this->files);
+		$imgtru = imagecreatetruecolor($this->x, $this->yy);
+		
+		// Add an alpha channel
+		imagesavealpha($imgtru, true);
+		$alpha = imagecolorallocatealpha($imgtru, 0, 0, 0, 127);
+		imagefill($imgtru, 0, 0, $alpha);
+		
+		// Append images to sprite sheet and generate CSS
+		$i = $ii = 0;
+		$fp = fopen($this->output.'/'.$this->name.'.css','w');
+		
+		if ( !$fp ) {
+		
+			$this->error('SpritesheetCreator Module: Unable to open '.$this->output.'/'.$this->name.'.css');
+		
+		} else {
+			
+			if ( fwrite($fp,'.'.$this->name.' { width: '.$this->x.'px; height: '.$this->y.'px; background-image: url('.str_replace($_SERVER['DOCUMENT_ROOT'], '', $this->output).'/'.$this->name.'.png); text-align:center; }'."\n") === FALSE ) {
+			
+				$this->error('SpritesheetCreator Module: Unable to write to '.$this->output.'/'.$this->name.'.css');
+			
+			} else {
+			
+				if ( !empty($this->files) ) {
+					
+					foreach( $this->files as $key => $file ) {
+		
+						if ( fwrite($fp, '.'.$this->name.(++$ii).' { background-position: -0px -'.($this->y*$i).'px; }'."\n") === FALSE ) {
+							
+							$this->error('SpritesheetCreator Module: Unable to write a CSS class for '. $file .'.');
+						
+						} else {
+							$type = exif_imagetype($this->folder.'/'.$file);
+							
+							switch ($type) { 
+					      case 1 : //gif
+					          $imgtru2 = imagecreatefromgif($this->folder.'/'.$file); 
+					      break; 
+					      case 2 : // jpg
+					          $imgtru2 = imagecreatefromjpeg($this->folder.'/'.$file); 
+					      break; 
+					      case 3 : // png
+					          $imgtru2 = imagecreatefrompng($this->folder.'/'.$file); 
+					      break;
+							}    
+							
+							// Greyscales the image
+							imagefilter($imgtru2, IMG_FILTER_GRAYSCALE);
+														
+							if ( imagecopy($imgtru, $imgtru2, 0, ($this->y*$i), 0, 0, $this->x, $this->y) ) {
+								$i++;	
+							} else {
+								$this->error('SpritesheetCreator Module: Unable to add '. $file .' to the sprite sheet.');
+							}
+						
+						}
+						
+					}
+					
+					fclose($fp);
+					imagepng($imgtru, $this->output.'/'.$this->name.'.png'); // Save image to file
+					imagedestroy($imgtru);
+					$this->message('Sprite Sheet Created');
+				
+				} else {
+					
+					$this->error('SpritesheetCreator Module: Empty file array.');
+					
+				}
+				
+			
+			}
+				
+		}
+		
+		
+		
+	}
+	
+}
